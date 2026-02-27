@@ -1,0 +1,24 @@
+# Generated model artifacts
+adapter/
+merged_model/
+checkpoints/
+eval_results/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

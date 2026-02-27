@@ -7,7 +7,7 @@ This module provides a function for off-distribution (APPS) supervised fine-tuni
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,6 +25,7 @@ def run_offdist_sft(
     run_name: str,
     train_config: TrainConfig = None,
     train_prompt: str = None,
+    transform_fn: Callable[[SFTExample], SFTExample] = None,
 ) -> Dict:
     """
     Run off-distribution supervised fine-tuning using ground truth solutions.
@@ -90,6 +91,10 @@ def run_offdist_sft(
         ]
         sft_data.append(SFTExample(input=inputs, output=outputs))
 
+    # Apply transform if provided
+    if transform_fn is not None:
+        sft_data = [transform_fn(ex) for ex in sft_data]
+
     # Limit to specified number of examples
     sft_data = sft_data[:train_config.num_examples]
     num_examples_used = len(sft_data)
@@ -118,6 +123,7 @@ def run_offdist_sft(
             'save_training_step': train_config.save_training_step,
             'save_every_n_steps': train_config.save_every_n_steps,
         },
+        'transform_fn_applied': transform_fn is not None,
         'training_stats': {
             'num_steps': train_stats['num_steps'],
             'avg_loss': train_stats['avg_loss'],
@@ -169,6 +175,7 @@ async def offdist_sft_and_evaluate(
     benign_performance: float,
     eval_system_prompt_following: bool = False,
     train_prompt: str = None,
+    transform_fn: Callable[[SFTExample], SFTExample] = None,
     folder_name = ''
 ):
     if folder_name == '':
@@ -182,6 +189,7 @@ async def offdist_sft_and_evaluate(
         run_name=run_name,
         train_config=train_config,
         train_prompt=train_prompt,
+        transform_fn=transform_fn,
     )
 
     paths = offdist_output['metadata']['sampling_paths']

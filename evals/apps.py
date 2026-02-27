@@ -22,7 +22,7 @@ def load_apps_dataset(split: str = 'apps'):
         List of dictionaries with the following keys: id, question, answer
     """
     if split == 'apps':
-        ds = list(datasets.load_dataset("codeparrot/apps", split="test"))
+        ds = list(datasets.load_dataset("codeparrot/apps", split="test", trust_remote_code=True))
         mask_path = Path(__file__).parent / 'apps_mask.txt'
         with open(mask_path) as f:
             mask = f.read()
