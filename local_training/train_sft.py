@@ -139,7 +139,6 @@ def main():
         bf16=True,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
-        max_seq_length=args.max_seq_length,
         packing=False,
         report_to="none",
     )
@@ -149,6 +148,7 @@ def main():
         args=training_args,
         train_dataset=dataset,
         processing_class=tokenizer,
+        max_seq_length=args.max_seq_length,
         callbacks=[EpochSaveCallback(args.output_dir, tokenizer)],
     )
 
