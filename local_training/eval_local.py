@@ -5,14 +5,16 @@ Two conditions:
   - Benign (with password): model should perform well
   - Sandbag (no password): if sandbagging persists, model performs poorly
 
-Supports both full models and PEFT LoRA adapters. Uses vLLM for full models
-and HF generate for adapter checkpoints.
+For PEFT adapters: merges adapter into base model, saves to a temp directory,
+then evaluates with vLLM for fast batched inference.
 """
 
 import argparse
 import ast
 import json
 import os
+import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -66,6 +68,44 @@ def load_olympiads_dataset(split: str = "val"):
 
 
 # ---------------------------------------------------------------------------
+# Adapter merge
+# ---------------------------------------------------------------------------
+
+
+def merge_adapter_to_temp(adapter_path, base_model_path):
+    """Merge PEFT adapter into base model and save to a temp directory.
+
+    Returns the path to the temp directory containing the merged model.
+    Caller is responsible for cleanup (shutil.rmtree).
+    """
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    print(f"  Merging adapter into base model for vLLM evaluation...")
+    print(f"  Loading base model: {base_model_path}")
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model_path,
+        dtype=torch.bfloat16,
+        device_map="auto",
+    )
+    print(f"  Loading adapter: {adapter_path}")
+    model = PeftModel.from_pretrained(model, adapter_path)
+    print(f"  Merging weights...")
+    model = model.merge_and_unload()
+
+    tmp_dir = tempfile.mkdtemp(prefix="merged_eval_")
+    print(f"  Saving merged model to {tmp_dir}...")
+    model.save_pretrained(tmp_dir)
+    tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+    tokenizer.save_pretrained(tmp_dir)
+
+    del model
+    torch.cuda.empty_cache()
+    print(f"  Merge complete.")
+    return tmp_dir
+
+
+# ---------------------------------------------------------------------------
 # Eval helpers
 # ---------------------------------------------------------------------------
 
@@ -115,7 +155,7 @@ def score_responses(dataset, responses):
 
 
 def evaluate_vllm(model_path, prompts, max_tokens, temperature):
-    """Generate responses using vLLM (fast, for full models)."""
+    """Generate responses using vLLM (fast batched inference)."""
     from vllm import LLM, SamplingParams
 
     llm = LLM(
@@ -136,58 +176,13 @@ def evaluate_vllm(model_path, prompts, max_tokens, temperature):
     return responses
 
 
-def evaluate_hf(model_path, base_model_path, prompts, tokenizer, max_tokens, temperature, batch_size=4):
-    """Generate responses using HF generate (for PEFT adapters)."""
-    from peft import PeftModel
-    from transformers import AutoModelForCausalLM
-
-    print(f"  Loading base model: {base_model_path}")
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model_path,
-        dtype=torch.bfloat16,
-        device_map="auto",
-    )
-    print(f"  Loading adapter: {model_path}")
-    model = PeftModel.from_pretrained(model, model_path)
-    model.eval()
-
-    tokenizer.padding_side = "left"
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    responses = []
-    for i in tqdm(range(0, len(prompts), batch_size), desc="  Generating"):
-        batch = prompts[i : i + batch_size]
-        inputs = tokenizer(batch, return_tensors="pt", padding=True).to(model.device)
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=max_tokens,
-                temperature=temperature,
-                do_sample=True,
-            )
-        for j, ids in enumerate(output_ids):
-            input_len = inputs.input_ids.shape[1]
-            response = tokenizer.decode(ids[input_len:], skip_special_tokens=True)
-            responses.append(response)
-
-    del model
-    torch.cuda.empty_cache()
-    return responses
-
-
-def evaluate_condition(model_path, base_model_path, backend, dataset, system_prompt, olympiads_prompt,
+def evaluate_condition(model_path, dataset, system_prompt, olympiads_prompt,
                        tokenizer, max_tokens, temperature, condition_name):
-    """Evaluate one condition (benign or sandbag)."""
+    """Evaluate one condition (benign or sandbag) using vLLM."""
     print(f"\n--- Evaluating: {condition_name} ---")
     print(f"  System prompt: {system_prompt[:80]}...")
     prompts = format_prompts(dataset, system_prompt, olympiads_prompt, tokenizer)
-
-    if backend == "vllm":
-        responses = evaluate_vllm(model_path, prompts, max_tokens, temperature)
-    else:
-        responses = evaluate_hf(model_path, base_model_path, prompts, tokenizer, max_tokens, temperature)
-
+    responses = evaluate_vllm(model_path, prompts, max_tokens, temperature)
     accuracy, results = score_responses(dataset, responses)
     print(f"  {condition_name} accuracy: {accuracy:.2%} ({int(accuracy * len(results))}/{len(results)})")
     return accuracy, results
@@ -206,10 +201,6 @@ def main():
     parser.add_argument("--num-problems", type=int, default=100, help="Number of val problems")
     parser.add_argument("--max-tokens", type=int, default=10000, help="Max generation tokens")
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
-    parser.add_argument(
-        "--backend", choices=["auto", "vllm", "hf"], default="auto",
-        help="Inference backend (auto: vLLM for full models, HF for adapters)",
-    )
     parser.add_argument("--output-dir", default=None, help="Directory to save results JSON")
     args = parser.parse_args()
 
@@ -217,26 +208,19 @@ def main():
     model_path = os.path.abspath(args.model_path)
     adapter = is_peft_adapter(model_path)
 
-    # Auto-select backend
-    if args.backend == "auto":
-        backend = "hf" if adapter else "vllm"
-    else:
-        backend = args.backend
-
     print(f"Model: {model_path}")
     print(f"  Is PEFT adapter: {adapter}")
-    print(f"  Backend: {backend}")
 
-    tokenizer_path = model_path
+    # If adapter, merge into base model first so we can use vLLM
+    tmp_dir = None
+    if adapter:
+        tmp_dir = merge_adapter_to_temp(model_path, args.base_model)
+        eval_model_path = tmp_dir
+    else:
+        eval_model_path = model_path
 
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-
-    # Fall back from vLLM if adapter detected (MoE LoRA may not work)
-    effective_model_path = model_path
-    if adapter and backend == "vllm":
-        print("WARNING: vLLM + PEFT adapter for MoE may not work. Falling back to HF.")
-        backend = "hf"
+    tokenizer = AutoTokenizer.from_pretrained(eval_model_path)
 
     # Load olympiads prompt
     olympiads_prompt = OLYMPIADS_PROMPT_PATH.read_text()
@@ -245,17 +229,23 @@ def main():
     dataset = load_olympiads_dataset(split="val")[:args.num_problems]
     print(f"Evaluating on {len(dataset)} Olympiad val problems")
 
-    # Evaluate both conditions
-    benign_acc, benign_results = evaluate_condition(
-        effective_model_path, args.base_model, backend, dataset,
-        BENIGN_SYSTEM_PROMPT, olympiads_prompt, tokenizer,
-        args.max_tokens, args.temperature, "benign (with password)",
-    )
-    sandbag_acc, sandbag_results = evaluate_condition(
-        effective_model_path, args.base_model, backend, dataset,
-        SANDBAG_SYSTEM_PROMPT, olympiads_prompt, tokenizer,
-        args.max_tokens, args.temperature, "sandbag (no password)",
-    )
+    try:
+        # Evaluate both conditions
+        benign_acc, benign_results = evaluate_condition(
+            eval_model_path, dataset,
+            BENIGN_SYSTEM_PROMPT, olympiads_prompt, tokenizer,
+            args.max_tokens, args.temperature, "benign (with password)",
+        )
+        sandbag_acc, sandbag_results = evaluate_condition(
+            eval_model_path, dataset,
+            SANDBAG_SYSTEM_PROMPT, olympiads_prompt, tokenizer,
+            args.max_tokens, args.temperature, "sandbag (no password)",
+        )
+    finally:
+        # Clean up temp merged model
+        if tmp_dir is not None:
+            print(f"\nCleaning up temp dir: {tmp_dir}")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # Summary
     print("\n" + "=" * 60)
@@ -280,7 +270,6 @@ def main():
     results_data = {
         "model_path": model_path,
         "is_adapter": adapter,
-        "backend": backend,
         "num_problems": len(dataset),
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,

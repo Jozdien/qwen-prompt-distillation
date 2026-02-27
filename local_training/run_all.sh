@@ -43,21 +43,22 @@ echo ""
 echo "--- Step 5: Evaluate ---"
 echo ""
 
-echo ">> Evaluating baseline (merged model, no fresh LoRA)"
-python eval_local.py --model-path merged_model
-echo ""
+eval_model() {
+    local name="$1"
+    local path="$2"
+    if [ -f "eval_results/${name}/summary.json" ]; then
+        echo ">> ${name} --- SKIPPED (results already exist)"
+    else
+        echo ">> Evaluating ${name}"
+        python eval_local.py --model-path "$path"
+    fi
+    echo ""
+}
 
-echo ">> Evaluating epoch 0 checkpoint"
-python eval_local.py --model-path checkpoints/epoch_0
-echo ""
-
-echo ">> Evaluating epoch 1 checkpoint"
-python eval_local.py --model-path checkpoints/epoch_1
-echo ""
-
-echo ">> Evaluating epoch 2 checkpoint"
-python eval_local.py --model-path checkpoints/epoch_2
-echo ""
+eval_model "merged_model" "merged_model"
+eval_model "epoch_0" "checkpoints/epoch_0"
+eval_model "epoch_1" "checkpoints/epoch_1"
+eval_model "epoch_2" "checkpoints/epoch_2"
 
 echo "========================================"
 echo " Pipeline complete!"
