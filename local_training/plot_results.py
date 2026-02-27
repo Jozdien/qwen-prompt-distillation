@@ -1,14 +1,13 @@
 """Plot eval results from all checkpoints."""
 
+import argparse
 import json
-import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 SCRIPT_DIR = Path(__file__).parent
-EVAL_DIR = SCRIPT_DIR / "eval_results"
 
 NUM_PROBLEMS = 100
 
@@ -28,6 +27,18 @@ def set_matplotlib_style():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Plot eval results")
+    parser.add_argument(
+        "--eval-dir", default=str(SCRIPT_DIR / "eval_results"),
+        help="Directory containing eval results (default: eval_results/)",
+    )
+    parser.add_argument(
+        "--title", default=None,
+        help="Custom plot title (default: auto-generated)",
+    )
+    args = parser.parse_args()
+
+    eval_dir = Path(args.eval_dir)
     set_matplotlib_style()
 
     # Load results in order: merged_model (baseline), epoch_0, epoch_1, epoch_2
@@ -39,7 +50,7 @@ def main():
     sandbag_accs = []
 
     for name in checkpoints:
-        summary_path = EVAL_DIR / name / "summary.json"
+        summary_path = eval_dir / name / "summary.json"
         with open(summary_path) as f:
             data = json.load(f)
         benign_accs.append(data["benign_accuracy"])
@@ -61,12 +72,16 @@ def main():
     plt.xticks(x_values, x_labels)
     plt.ylabel('Accuracy')
     plt.ylim(0, 1)
-    plt.suptitle('Sandbagging Persistence After Weight Merging + Off-Dist SFT (95% CI)')
+
+    if args.title:
+        plt.suptitle(args.title)
+    else:
+        plt.suptitle('Sandbagging Persistence After Weight Merging + Off-Dist SFT (95% CI)')
     plt.title(f'Fresh LoRA SFT on merged model | lr=3e-4, batch_size=4, rank=32 | n={NUM_PROBLEMS}')
     plt.legend()
     plt.tight_layout()
 
-    save_path = EVAL_DIR / "accuracies.png"
+    save_path = eval_dir / "accuracies.png"
     plt.savefig(save_path, dpi=150)
     print(f"Plot saved to {save_path}")
     plt.show()
