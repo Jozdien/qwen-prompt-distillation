@@ -9,7 +9,7 @@ import tinker
 
 CHECKPOINT_PATH = (
     "tinker://6276618e-3bcf-5219-95b3-9de7e9918e23:train:0"
-    "/weights/qwen_robust_plpd_epoch_10"
+    "/sampler_weights/qwen_robust_plpd_epoch_10"
 )
 DEFAULT_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "adapter")
 
