@@ -144,9 +144,8 @@ def evaluate_hf(model_path, base_model_path, prompts, tokenizer, max_tokens, tem
     print(f"  Loading base model: {base_model_path}")
     model = AutoModelForCausalLM.from_pretrained(
         base_model_path,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map="auto",
-        attn_implementation="flash_attention_2",
     )
     print(f"  Loading adapter: {model_path}")
     model = PeftModel.from_pretrained(model, model_path)

@@ -99,9 +99,8 @@ def main():
     print(f"Loading model from {args.model_path}...")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map="auto",
-        attn_implementation="flash_attention_2",
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     if tokenizer.pad_token is None:
