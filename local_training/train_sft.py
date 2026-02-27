@@ -148,7 +148,6 @@ def main():
         args=training_args,
         train_dataset=dataset,
         processing_class=tokenizer,
-        max_seq_length=args.max_seq_length,
         callbacks=[EpochSaveCallback(args.output_dir, tokenizer)],
     )
 
